@@ -19,7 +19,7 @@ Extrai a stack de dependências e plugins de projetos Gradle (parsing estático,
 ## Como usar
 
 ```bash
-python3 gradle_stack_toolkit.py contacorrente -o cce.csv -x br.com.unicred -x br.com.unicred.us
+python3 gradle_stack_toolkit.py projetos -o cce.csv -x com.acme -x br.com.acme
 ```
 
 onde:
