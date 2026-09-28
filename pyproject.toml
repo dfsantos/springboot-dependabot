@@ -1,0 +1,17 @@
+[project]
+name = "springboot-dependabot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Diego Santos", email = "diego.santos@e-unicred.com.br" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+springboot-dependabot = "springboot_dependabot:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
