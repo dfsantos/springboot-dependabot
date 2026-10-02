@@ -4,6 +4,7 @@ Extrai a stack de dependências e plugins de projetos Gradle (parsing estático,
 
 ## O que faz
 
+- Clona automaticamente, antes da extração, os repositórios que ainda não existem dentro da pasta raiz — vindos de um arquivo de registro (`repos.txt`, um path por linha) e/ou da flag `--repo`. Aceita URLs SSH e HTTPS; falha ao clonar não interrompe o fluxo.
 - Varre `build.gradle` / `build.gradle.kts` recursivamente (suporta multi-módulo).
 - Gera CSV com: `Projeto, Nome, Versao, Escopo` (escopos: `build`, `development`, `runtime`, `test`, `plugin`).
 - Resolve Version Catalogs (`libs.versions.toml`).
@@ -46,6 +47,17 @@ uv run check projetos -o cce.csv --legacy-plugin com.empresa.arch.custom
 
 # Via variável de ambiente
 LEGACY_PLUGINS="com.empresa.arch.custom,com.empresa.arch.outro" uv run check projetos -o cce.csv
+```
+
+- `--repo URL` (repetível) — URL de repositório git (SSH ou HTTPS) a clonar para dentro da pasta raiz antes da extração, caso ainda não exista localmente. URLs novas são automaticamente acrescentadas ao arquivo de registro (`--repos-file`, padrão `repos.txt`, dentro da própria pasta raiz) para serem reaproveitadas nas próximas execuções. Falha ao clonar não interrompe o fluxo.
+- `--repos-file NOME` — nome do arquivo de registro de repositórios (um path por linha). Padrão: `repos.txt`.
+
+```bash
+# Primeira execução: clona os repositórios informados para dentro de "projetos/" e registra em projetos/repos.txt
+uv run check projetos -o cce.csv --repo git@github.com:empresa/repo-a.git --repo https://github.com/empresa/repo-b.git
+
+# Execuções seguintes: basta editar projetos/repos.txt (um path por linha) ou rodar sem --repo
+uv run check projetos -o cce.csv
 ```
 
 ## Limitações (parsing estático)

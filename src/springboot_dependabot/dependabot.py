@@ -3,6 +3,11 @@
 Gradle Stack Toolkit
 ----------------------
 Script único que consolida:
+    0. Clonagem      — antes de extrair, clona (se ainda não existirem em
+                        disco) os repositórios listados em repos.txt (dentro
+                        do diretório raiz) e/ou informados via --repo.
+                        Aceita URLs SSH e HTTPS; falha ao clonar não
+                        interrompe o fluxo.
     1. Extractor     — parsing estático de build.gradle/build.gradle.kts,
                         gera CSV: Projeto, Nome, Versao, Escopo.
     2. Plugin Legado  — lê o CSV do extractor e marca projetos que usam
@@ -11,20 +16,20 @@ Script único que consolida:
                         LEGACY_PLUGINS; padrão: arch.springconfig,
                         arch.buildconfig), acrescentando a coluna
                         "Usa Plugin Legado" (Sim/Não).
-    3. Pipeline      — executa as duas etapas acima em sequência.
+    3. Pipeline      — executa as etapas acima em sequência.
 
 Uso:
-    # Comportamento padrão (equivalente ao antigo wrapper): extrai e detecta uso de Plugin Legado
-    python gradle_stack_toolkit.py <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--legacy-plugin PLUGIN_ID ...] [--keep-intermediate]
+    # Comportamento padrão (equivalente ao antigo wrapper): clona, extrai e detecta uso de Plugin Legado
+    python gradle_stack_toolkit.py <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--legacy-plugin PLUGIN_ID ...] [--repo URL ...] [--repos-file NOME] [--keep-intermediate]
 
     # Rodar apenas a extração (equivalente ao antigo gradle_stack_extractor.py)
-    python gradle_stack_toolkit.py extract <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...]
+    python gradle_stack_toolkit.py extract <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--repo URL ...] [--repos-file NOME]
 
     # Rodar apenas a detecção de Plugin Legado sobre um CSV existente
     python gradle_stack_toolkit.py legacy-plugin <entrada.csv> [-o saida.csv] [--legacy-plugin PLUGIN_ID ...]
 
     # Pipeline explícito (idêntico ao padrão, mas nomeado)
-    python gradle_stack_toolkit.py pipeline <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--legacy-plugin PLUGIN_ID ...] [--keep-intermediate]
+    python gradle_stack_toolkit.py pipeline <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--legacy-plugin PLUGIN_ID ...] [--repo URL ...] [--repos-file NOME] [--keep-intermediate]
 
 Limitações conhecidas do parsing estático (etapa de extração):
     - Não resolve variáveis complexas definidas fora do arquivo (ex: em
@@ -42,6 +47,7 @@ import argparse
 import csv
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -52,6 +58,94 @@ try:
     import tomllib  # Python 3.11+
 except ImportError:
     tomllib = None
+
+
+# ==========================================================================
+# ETAPA 0: CLONAGEM DE REPOSITÓRIOS
+# ==========================================================================
+
+DEFAULT_REPOS_FILENAME = "repos.txt"
+
+
+def read_repo_paths_file(path: Path) -> list:
+    """Lê um path (URL de repositório) por linha; ignora linhas em branco e
+    comentários (iniciados com #)."""
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+
+
+def append_new_repo_paths(path: Path, new_urls: list) -> None:
+    """Acrescenta URLs ainda não presentes no arquivo (cria arquivo/pastas se necessário)."""
+    if not new_urls:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        for url in new_urls:
+            f.write(url + "\n")
+
+
+def resolve_repo_urls(root: Path, cli_repos: list, repos_filename: str) -> list:
+    """Combina o arquivo de registro (repos.txt) com novas URLs vindas de
+    --repo. URLs novas via CLI são persistidas no arquivo (registro
+    cumulativo), para serem reaproveitadas nas próximas execuções."""
+    repos_file = root / repos_filename
+    file_urls = read_repo_paths_file(repos_file)
+    new_cli_urls = [u for u in cli_repos if u not in file_urls]
+    append_new_repo_paths(repos_file, new_cli_urls)
+
+    all_urls = []
+    seen = set()
+    for url in file_urls + new_cli_urls:
+        if url not in seen:
+            seen.add(url)
+            all_urls.append(url)
+    return all_urls
+
+
+def repo_dir_name(url: str) -> str:
+    """Deriva o nome do diretório local a partir de uma URL de repositório
+    SSH (git@host:org/repo.git) ou HTTPS (https://host/org/repo.git)."""
+    name = url.rstrip("/").rsplit("/", 1)[-1]
+    name = name.rsplit(":", 1)[-1]  # cobre o raro caso sem "/" (git@host:repo.git)
+    if name.endswith(".git"):
+        name = name[:-4]
+    return name
+
+
+def clone_repo(url: str, dest: Path) -> bool:
+    """Tenta clonar 'url' em 'dest'. Nunca levanta exceção nem interrompe o
+    fluxo do script: qualquer falha (rede, credencial, URL inválida, git
+    ausente, timeout) é reportada em stderr e tratada como não-fatal."""
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=10",
+    }
+    try:
+        result = subprocess.run(
+            ["git", "clone", url, str(dest)],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"[aviso] falha ao clonar '{url}': {e}", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        print(f"[aviso] falha ao clonar '{url}': {result.stderr.strip()}", file=sys.stderr)
+        return False
+    print(f"[info] clonado '{url}' -> {dest}", file=sys.stderr)
+    return True
+
+
+def clone_missing_repos(root: Path, repo_urls: list) -> None:
+    """Clona em 'root' cada URL de 'repo_urls' cujo diretório de destino
+    ainda não existe. Repositórios já clonados são silenciosamente pulados."""
+    for url in repo_urls:
+        dest = root / repo_dir_name(url)
+        if dest.exists():
+            continue
+        clone_repo(url, dest)
 
 
 # ==========================================================================
@@ -451,7 +545,12 @@ def write_extract_csv(entries, output_path: Path):
             writer.writerow([e.project, e.name, e.version, e.scope])
 
 
-def run_extract(root: Path, output_path: Path, excluded_groups: list = None):
+def run_extract(root: Path, output_path: Path, excluded_groups: list = None, cli_repos: list = None, repos_filename: str = DEFAULT_REPOS_FILENAME):
+    root.mkdir(parents=True, exist_ok=True)
+    repo_urls = resolve_repo_urls(root, cli_repos or [], repos_filename)
+    if repo_urls:
+        clone_missing_repos(root, repo_urls)
+
     entries = extract(root, excluded_groups=excluded_groups)
     if not entries:
         print("[aviso] Nenhuma dependência/plugin encontrado. Verifique o caminho informado.", file=sys.stderr)
@@ -537,12 +636,12 @@ def run_legacy_plugin(input_path: Path, output_path: Path, legacy_plugin_ids: li
 # ETAPA 3: PIPELINE (extract -> legacy-plugin)
 # ==========================================================================
 
-def run_pipeline(root: Path, output_path: Path, excluded_groups: list = None, keep_intermediate: bool = False, legacy_plugin_ids: list = None):
+def run_pipeline(root: Path, output_path: Path, excluded_groups: list = None, keep_intermediate: bool = False, legacy_plugin_ids: list = None, cli_repos: list = None, repos_filename: str = DEFAULT_REPOS_FILENAME):
     with tempfile.TemporaryDirectory() as tmp_dir:
         intermediate_path = Path(tmp_dir) / "gradle_stack_intermediate.csv"
 
         print(f"[1/2] Extraindo stack de '{root}'...")
-        run_extract(root, intermediate_path, excluded_groups=excluded_groups)
+        run_extract(root, intermediate_path, excluded_groups=excluded_groups, cli_repos=cli_repos, repos_filename=repos_filename)
 
         if not intermediate_path.exists():
             print("Erro: extração não gerou o CSV intermediário esperado.", file=sys.stderr)
@@ -593,6 +692,31 @@ def add_legacy_plugin_arg(parser):
     )
 
 
+def add_repo_args(parser):
+    parser.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        metavar="URL",
+        help="URL de repositório git (SSH ou HTTPS) a clonar para dentro do "
+             "diretório raiz antes da extração, caso ainda não exista "
+             "localmente. Repetível: --repo git@host:org/foo.git --repo "
+             "https://host/org/bar.git. URLs novas são automaticamente "
+             "acrescentadas ao arquivo de registro (ver --repos-file) para "
+             "serem reaproveitadas nas próximas execuções. Falha ao clonar "
+             "não interrompe o fluxo."
+    )
+    parser.add_argument(
+        "--repos-file",
+        type=str,
+        default=DEFAULT_REPOS_FILENAME,
+        metavar="NOME",
+        help="Nome do arquivo de registro de repositórios (um path por "
+             f"linha), lido/gravado dentro do diretório raiz. Padrão: "
+             f"{DEFAULT_REPOS_FILENAME}."
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Gradle Stack Toolkit: extrai stack de projetos Gradle e detecta uso de Plugin Legado."
@@ -604,6 +728,7 @@ def build_parser():
     p_extract.add_argument("root", type=str, help="Diretório raiz do projeto Gradle (multi-módulo ou não).")
     p_extract.add_argument("-o", "--output", type=str, default="gradle_stack.csv", help="Caminho do CSV de saída.")
     add_exclude_group_arg(p_extract)
+    add_repo_args(p_extract)
 
     # Subcomando: legacy-plugin
     p_legacy_plugin = subparsers.add_parser("legacy-plugin", help="Apenas detecta uso de Plugin Legado a partir de um CSV já extraído.")
@@ -617,6 +742,7 @@ def build_parser():
     p_pipeline.add_argument("-o", "--output", type=str, default="gradle_stack_legacy_plugin.csv", help="Caminho do CSV final de saída.")
     add_exclude_group_arg(p_pipeline)
     add_legacy_plugin_arg(p_pipeline)
+    add_repo_args(p_pipeline)
     p_pipeline.add_argument("--keep-intermediate", action="store_true", help="Preserva o CSV intermediário (saída da extração) para inspeção.")
 
     return parser
@@ -639,11 +765,8 @@ def main():
 
     if args.command == "extract":
         root = Path(args.root).resolve()
-        if not root.exists():
-            print(f"Erro: diretório '{root}' não existe.", file=sys.stderr)
-            sys.exit(1)
         output_path = Path(args.output).resolve()
-        run_extract(root, output_path, excluded_groups=args.exclude_group)
+        run_extract(root, output_path, excluded_groups=args.exclude_group, cli_repos=args.repo, repos_filename=args.repos_file)
 
     elif args.command == "legacy-plugin":
         input_path = Path(args.input).resolve()
@@ -655,11 +778,8 @@ def main():
 
     elif args.command == "pipeline":
         root = Path(args.root).resolve()
-        if not root.exists():
-            print(f"Erro: diretório '{root}' não existe.", file=sys.stderr)
-            sys.exit(1)
         output_path = Path(args.output).resolve()
-        run_pipeline(root, output_path, excluded_groups=args.exclude_group, keep_intermediate=args.keep_intermediate, legacy_plugin_ids=args.legacy_plugin)
+        run_pipeline(root, output_path, excluded_groups=args.exclude_group, keep_intermediate=args.keep_intermediate, legacy_plugin_ids=args.legacy_plugin, cli_repos=args.repo, repos_filename=args.repos_file)
 
     else:
         parser.print_help()
