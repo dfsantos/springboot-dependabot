@@ -1,13 +1,13 @@
 # Gradle Stack Toolkit
 
-Extrai a stack de dependências e plugins de projetos Gradle (parsing estático, sem executar o Gradle) e identifica projetos que usam chassi.
+Extrai a stack de dependências e plugins de projetos Gradle (parsing estático, sem executar o Gradle) e identifica projetos que usam algum Plugin Legado.
 
 ## O que faz
 
 - Varre `build.gradle` / `build.gradle.kts` recursivamente (suporta multi-módulo).
 - Gera CSV com: `Projeto, Nome, Versao, Escopo` (escopos: `build`, `development`, `runtime`, `test`, `plugin`).
 - Resolve Version Catalogs (`libs.versions.toml`).
-- Marca projetos que usam chassi (plugins com `arch.springconfig` ou `arch.buildconfig` no identificador) na coluna `Usa chassi` (Sim/Não).
+- Marca projetos que usam algum **Plugin Legado** na coluna `Usa Plugin Legado` (Sim/Não). A lista de identificadores de plugin pesquisados é parametrizável via `--legacy-plugin` ou variável de ambiente `LEGACY_PLUGINS`; se nenhum dos dois for informado, usa o padrão (`arch.springconfig`, `arch.buildconfig`).
 - Permite excluir dependências por groupId (plugins nunca são excluídos).
 - Deduplica entradas repetidas entre módulos.
 
@@ -38,6 +38,15 @@ onde:
 ### Opções úteis
 
 - `-x GROUP_ID` (repetível) — ignora dependências desse groupId (ex: `-x org.springframework`). Só afeta dependências, não plugins.
+- `--legacy-plugin PLUGIN_ID` (repetível) — identificador (ou substring) de plugin considerado "Plugin Legado" para a coluna `Usa Plugin Legado`. Também pode ser definido via variável de ambiente `LEGACY_PLUGINS` (lista separada por vírgula). Precedência: `--legacy-plugin` > `LEGACY_PLUGINS` > padrão (`arch.springconfig`, `arch.buildconfig`).
+
+```bash
+# Via linha de comando
+uv run check projetos -o cce.csv --legacy-plugin com.empresa.arch.custom
+
+# Via variável de ambiente
+LEGACY_PLUGINS="com.empresa.arch.custom,com.empresa.arch.outro" uv run check projetos -o cce.csv
+```
 
 ## Limitações (parsing estático)
 
