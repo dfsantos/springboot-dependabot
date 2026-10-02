@@ -3,25 +3,28 @@
 Gradle Stack Toolkit
 ----------------------
 Script único que consolida:
-    1. Extractor  — parsing estático de build.gradle/build.gradle.kts,
-                     gera CSV: Projeto, Nome, Versao, Escopo.
-    2. Chassi     — lê o CSV do extractor e marca projetos que usam
-                     chassi (plugins arch.springconfig / arch.buildconfig),
-                     acrescentando a coluna "Usa chassi" (Sim/Não).
-    3. Pipeline   — executa as duas etapas acima em sequência.
+    1. Extractor     — parsing estático de build.gradle/build.gradle.kts,
+                        gera CSV: Projeto, Nome, Versao, Escopo.
+    2. Plugin Legado  — lê o CSV do extractor e marca projetos que usam
+                        algum Plugin Legado (identificadores configuráveis
+                        via --legacy-plugin ou variável de ambiente
+                        LEGACY_PLUGINS; padrão: arch.springconfig,
+                        arch.buildconfig), acrescentando a coluna
+                        "Usa Plugin Legado" (Sim/Não).
+    3. Pipeline      — executa as duas etapas acima em sequência.
 
 Uso:
-    # Comportamento padrão (equivalente ao antigo wrapper): extrai e detecta chassi
-    python gradle_stack_toolkit.py <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--keep-intermediate]
+    # Comportamento padrão (equivalente ao antigo wrapper): extrai e detecta uso de Plugin Legado
+    python gradle_stack_toolkit.py <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--legacy-plugin PLUGIN_ID ...] [--keep-intermediate]
 
     # Rodar apenas a extração (equivalente ao antigo gradle_stack_extractor.py)
     python gradle_stack_toolkit.py extract <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...]
 
-    # Rodar apenas a detecção de chassi sobre um CSV existente (equivalente ao antigo chassi_detector.py)
-    python gradle_stack_toolkit.py chassi <entrada.csv> [-o saida.csv]
+    # Rodar apenas a detecção de Plugin Legado sobre um CSV existente
+    python gradle_stack_toolkit.py legacy-plugin <entrada.csv> [-o saida.csv] [--legacy-plugin PLUGIN_ID ...]
 
     # Pipeline explícito (idêntico ao padrão, mas nomeado)
-    python gradle_stack_toolkit.py pipeline <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--keep-intermediate]
+    python gradle_stack_toolkit.py pipeline <diretorio_raiz> [-o saida.csv] [-x GROUP_ID ...] [--legacy-plugin PLUGIN_ID ...] [--keep-intermediate]
 
 Limitações conhecidas do parsing estático (etapa de extração):
     - Não resolve variáveis complexas definidas fora do arquivo (ex: em
@@ -37,6 +40,7 @@ Limitações conhecidas do parsing estático (etapa de extração):
 
 import argparse
 import csv
+import os
 import re
 import sys
 import tempfile
@@ -457,13 +461,26 @@ def run_extract(root: Path, output_path: Path, excluded_groups: list = None):
 
 
 # ==========================================================================
-# ETAPA 2: CHASSI DETECTOR
+# ETAPA 2: DETECTOR DE PLUGIN LEGADO
 # ==========================================================================
 
-CHASSI_PLUGINS = {"arch.springconfig", "arch.buildconfig"}
+DEFAULT_LEGACY_PLUGIN_IDS = ("arch.springconfig", "arch.buildconfig")
+LEGACY_PLUGIN_ENV_VAR = "LEGACY_PLUGINS"
 
 
-def read_chassi_input_rows(input_path: Path):
+def resolve_legacy_plugin_ids(cli_values: list) -> list:
+    """Resolve a lista de identificadores de Plugin Legado a pesquisar.
+
+    Precedência: --legacy-plugin (CLI) > LEGACY_PLUGINS (env var) > padrão."""
+    if cli_values:
+        return cli_values
+    env_value = os.environ.get(LEGACY_PLUGIN_ENV_VAR)
+    if env_value:
+        return [v.strip() for v in env_value.split(",") if v.strip()]
+    return list(DEFAULT_LEGACY_PLUGIN_IDS)
+
+
+def read_legacy_plugin_input_rows(input_path: Path):
     with input_path.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
@@ -478,48 +495,49 @@ def read_chassi_input_rows(input_path: Path):
     return rows, reader.fieldnames
 
 
-def detect_chassi_projects(rows):
+def detect_legacy_plugin_projects(rows, legacy_plugin_ids):
     """Retorna o conjunto de projetos que possuem algum plugin cujo
-    identificador contenha uma das substrings de chassi (ex:
-    'com.empresa.arch.buildconfig.gradle' também conta)."""
-    chassi_projects = set()
+    identificador contenha uma das substrings de Plugin Legado informadas
+    (ex: 'com.empresa.arch.buildconfig.gradle' também conta)."""
+    legacy_plugin_projects = set()
     for row in rows:
         nome = row["Nome"]
-        if any(marker in nome for marker in CHASSI_PLUGINS):
-            chassi_projects.add(row["Projeto"])
-    return chassi_projects
+        if any(marker in nome for marker in legacy_plugin_ids):
+            legacy_plugin_projects.add(row["Projeto"])
+    return legacy_plugin_projects
 
 
-def write_chassi_output(rows, fieldnames, chassi_projects, output_path: Path):
-    out_fieldnames = list(fieldnames) + ["Usa chassi"]
+def write_legacy_plugin_output(rows, fieldnames, legacy_plugin_projects, output_path: Path):
+    out_fieldnames = list(fieldnames) + ["Usa Plugin Legado"]
     with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=out_fieldnames)
         writer.writeheader()
         for row in rows:
             row_out = dict(row)
-            row_out["Usa chassi"] = "Sim" if row["Projeto"] in chassi_projects else "Não"
+            row_out["Usa Plugin Legado"] = "Sim" if row["Projeto"] in legacy_plugin_projects else "Não"
             writer.writerow(row_out)
 
 
-def run_chassi(input_path: Path, output_path: Path):
-    rows, fieldnames = read_chassi_input_rows(input_path)
-    chassi_projects = detect_chassi_projects(rows)
-    write_chassi_output(rows, fieldnames, chassi_projects, output_path)
+def run_legacy_plugin(input_path: Path, output_path: Path, legacy_plugin_ids: list = None):
+    resolved_ids = resolve_legacy_plugin_ids(legacy_plugin_ids)
+    rows, fieldnames = read_legacy_plugin_input_rows(input_path)
+    legacy_plugin_projects = detect_legacy_plugin_projects(rows, resolved_ids)
+    write_legacy_plugin_output(rows, fieldnames, legacy_plugin_projects, output_path)
 
     print(f"OK: {len(rows)} linhas processadas -> {output_path}")
-    if chassi_projects:
-        print(f"Projetos com chassi detectado ({len(chassi_projects)}):")
-        for p in sorted(chassi_projects):
+    if legacy_plugin_projects:
+        print(f"Projetos com Plugin Legado detectado ({len(legacy_plugin_projects)}):")
+        for p in sorted(legacy_plugin_projects):
             print(f"  - {p}")
     else:
-        print("Nenhum projeto com chassi detectado.")
+        print("Nenhum projeto com Plugin Legado detectado.")
 
 
 # ==========================================================================
-# ETAPA 3: PIPELINE (extract -> chassi)
+# ETAPA 3: PIPELINE (extract -> legacy-plugin)
 # ==========================================================================
 
-def run_pipeline(root: Path, output_path: Path, excluded_groups: list = None, keep_intermediate: bool = False):
+def run_pipeline(root: Path, output_path: Path, excluded_groups: list = None, keep_intermediate: bool = False, legacy_plugin_ids: list = None):
     with tempfile.TemporaryDirectory() as tmp_dir:
         intermediate_path = Path(tmp_dir) / "gradle_stack_intermediate.csv"
 
@@ -530,8 +548,8 @@ def run_pipeline(root: Path, output_path: Path, excluded_groups: list = None, ke
             print("Erro: extração não gerou o CSV intermediário esperado.", file=sys.stderr)
             sys.exit(1)
 
-        print("[2/2] Detectando uso de chassi...")
-        run_chassi(intermediate_path, output_path)
+        print("[2/2] Detectando uso de Plugin Legado...")
+        run_legacy_plugin(intermediate_path, output_path, legacy_plugin_ids=legacy_plugin_ids)
 
         if keep_intermediate:
             kept_path = output_path.parent / f"{output_path.stem}_intermediate.csv"
@@ -559,9 +577,25 @@ def add_exclude_group_arg(parser):
     )
 
 
+def add_legacy_plugin_arg(parser):
+    parser.add_argument(
+        "--legacy-plugin",
+        action="append",
+        default=[],
+        metavar="PLUGIN_ID",
+        help="Identificador (ou substring) de plugin considerado 'Plugin "
+             "Legado' para a coluna 'Usa Plugin Legado'. Repetível: "
+             "--legacy-plugin arch.springconfig --legacy-plugin "
+             "arch.buildconfig. Se omitido, usa a variável de ambiente "
+             f"{LEGACY_PLUGIN_ENV_VAR} (lista separada por vírgula) e, na "
+             "ausência desta, o padrão "
+             f"({', '.join(DEFAULT_LEGACY_PLUGIN_IDS)})."
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Gradle Stack Toolkit: extrai stack de projetos Gradle e detecta uso de chassi."
+        description="Gradle Stack Toolkit: extrai stack de projetos Gradle e detecta uso de Plugin Legado."
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -571,16 +605,18 @@ def build_parser():
     p_extract.add_argument("-o", "--output", type=str, default="gradle_stack.csv", help="Caminho do CSV de saída.")
     add_exclude_group_arg(p_extract)
 
-    # Subcomando: chassi
-    p_chassi = subparsers.add_parser("chassi", help="Apenas detecta uso de chassi a partir de um CSV já extraído.")
-    p_chassi.add_argument("input", type=str, help="Caminho do CSV de entrada (gerado pela etapa de extração).")
-    p_chassi.add_argument("-o", "--output", type=str, default="gradle_stack_chassi.csv", help="Caminho do CSV de saída.")
+    # Subcomando: legacy-plugin
+    p_legacy_plugin = subparsers.add_parser("legacy-plugin", help="Apenas detecta uso de Plugin Legado a partir de um CSV já extraído.")
+    p_legacy_plugin.add_argument("input", type=str, help="Caminho do CSV de entrada (gerado pela etapa de extração).")
+    p_legacy_plugin.add_argument("-o", "--output", type=str, default="gradle_stack_legacy_plugin.csv", help="Caminho do CSV de saída.")
+    add_legacy_plugin_arg(p_legacy_plugin)
 
     # Subcomando: pipeline (explícito)
-    p_pipeline = subparsers.add_parser("pipeline", help="Executa extração seguida de detecção de chassi (equivalente ao comportamento padrão).")
+    p_pipeline = subparsers.add_parser("pipeline", help="Executa extração seguida de detecção de Plugin Legado (equivalente ao comportamento padrão).")
     p_pipeline.add_argument("root", type=str, help="Diretório raiz do projeto Gradle.")
-    p_pipeline.add_argument("-o", "--output", type=str, default="gradle_stack_chassi.csv", help="Caminho do CSV final de saída.")
+    p_pipeline.add_argument("-o", "--output", type=str, default="gradle_stack_legacy_plugin.csv", help="Caminho do CSV final de saída.")
     add_exclude_group_arg(p_pipeline)
+    add_legacy_plugin_arg(p_pipeline)
     p_pipeline.add_argument("--keep-intermediate", action="store_true", help="Preserva o CSV intermediário (saída da extração) para inspeção.")
 
     return parser
@@ -591,7 +627,7 @@ def main():
     # Detecta se o primeiro argumento posicional é um subcomando conhecido;
     # caso contrário, insere "pipeline" implicitamente para manter o
     # comportamento do antigo script wrapper (gradle_stack_pipeline.py).
-    known_commands = {"extract", "chassi", "pipeline"}
+    known_commands = {"extract", "legacy-plugin", "pipeline"}
     argv = sys.argv[1:]
     if argv and argv[0] not in known_commands and not argv[0].startswith("-"):
         argv = ["pipeline"] + argv
@@ -609,13 +645,13 @@ def main():
         output_path = Path(args.output).resolve()
         run_extract(root, output_path, excluded_groups=args.exclude_group)
 
-    elif args.command == "chassi":
+    elif args.command == "legacy-plugin":
         input_path = Path(args.input).resolve()
         if not input_path.exists():
             print(f"Erro: arquivo '{input_path}' não existe.", file=sys.stderr)
             sys.exit(1)
         output_path = Path(args.output).resolve()
-        run_chassi(input_path, output_path)
+        run_legacy_plugin(input_path, output_path, legacy_plugin_ids=args.legacy_plugin)
 
     elif args.command == "pipeline":
         root = Path(args.root).resolve()
@@ -623,7 +659,7 @@ def main():
             print(f"Erro: diretório '{root}' não existe.", file=sys.stderr)
             sys.exit(1)
         output_path = Path(args.output).resolve()
-        run_pipeline(root, output_path, excluded_groups=args.exclude_group, keep_intermediate=args.keep_intermediate)
+        run_pipeline(root, output_path, excluded_groups=args.exclude_group, keep_intermediate=args.keep_intermediate, legacy_plugin_ids=args.legacy_plugin)
 
     else:
         parser.print_help()

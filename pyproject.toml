@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
-    { name = "Diego Santos", email = "diego.santos@e-unicred.com.br" }
+    { name = "Diego Santos", email = "santos.diegoferreira@gmail.com" }
 ]
 requires-python = ">=3.13"
 dependencies = []
 
 [project.scripts]
-springboot-dependabot = "springboot_dependabot:main"
+check = "springboot_dependabot.dependabot:main"
 
 [build-system]
 requires = ["uv_build>=0.12.18,<0.13.0"]
