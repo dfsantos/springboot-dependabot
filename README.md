@@ -19,7 +19,13 @@ Extrai a stack de dependências e plugins de projetos Gradle (parsing estático,
 ## Como usar
 
 ```bash
-python3 gradle_stack_toolkit.py projetos -o cce.csv -x com.acme -x br.com.acme
+uv run check projetos -o cce.csv -x com.acme -x br.com.acme
+```
+
+Alternativamente, sem o `uv`, é possível rodar o script diretamente:
+
+```bash
+python3 src/springboot_dependabot/dependabot.py projetos -o cce.csv -x com.acme -x br.com.acme
 ```
 
 onde:
