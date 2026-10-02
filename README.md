@@ -30,9 +30,9 @@ python3 src/springboot_dependabot/dependabot.py projetos -o cce.csv -x com.acme 
 
 onde:
 
-- **contacorrente**: é a pasta onde todos os repositórios estão
+- **projetos**: é a pasta onde todos os repositórios estão
 - **cce.csv**: nome do arquivo de saída com os dados coletados
-- **-x br.com.unicred** e **-x br.com.unicred**: exlusão de dependências que tenham este groupId (isso evita de detectar dependências internas como bibliotecas)
+- **-x com.acme** e **-x br.com.acme**: exclusão de dependências que tenham este groupId (isso evita de detectar dependências internas como bibliotecas)
 
 
 ### Opções úteis
